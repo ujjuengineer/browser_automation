@@ -1,0 +1,12 @@
+# Virtual environment
+env/
+
+# Python cache and testing artifacts
+__pycache__/
+.pytest_cache/
+
+# IDE specific settings (VS Code)
+.vscode/
+
+# Log files
+*.log
