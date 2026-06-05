@@ -35,17 +35,18 @@ NAV_TIMEOUT_MS: int   =  60_000   # Timeout for full-page navigations
 
 # Selectors used across steps
 NEW_REQ_BTN:       str = "#new_req_btn"
-OFFICE_DISTRICT:   str = "#office_district"
-OFFICE_SRO:        str = "#office_sro"
-VOLUME_DISTRICT:   str = "#volume_district"
-VOLUME_SRO:        str = "#volume_sro"
-VOLUME_NO:         str = "#volume_no"
-VOLUME_YEAR:       str = "#volume_year"
-BOOK_TYPE_SELECT:  str = "#bookType"       # <select> for book type
-ADD_VOLUME_BTN:    str = "#addVolumeBtn"
-DEED_NO:           str = "#deed_no"
-ADD_INDEX_BTN:     str = "#addindexBtn"
-SUBMIT_VOLUME_BTN: str = "#submitvolume"
+OFFICE_DISTRICT:   str = "#office_district" # checked
+OFFICE_SRO:        str = "#office_sro"      # checked
+VOLUME_DISTRICT:   str = "#volume_district" # checked
+VOLUME_SRO:        str = "#volume_sro"      # checked
+VOLUME_NO:         str = "#volume_no"       # checked
+VOLUME_YEAR:       str = "#volume_year"     # checked
+BOOK_TYPE_SELECT:  str = "#bookType"        # <select> for book type, checked
+ADD_VOLUME_BTN:    str = "#addVolumeBtn"    # checked
+DEED_NO:           str = "#deed_no"         # checked
+PRESENTATION_YEAR:  str = "#presentation_year"  # checked    # fixed this bug
+ADD_INDEX_BTN:     str = "#addindexBtn"         # checked
+SUBMIT_VOLUME_BTN: str = "#submitvolume"        # checked
 
 # ─────────────────────────────────────────────
 #  LOGGING SETUP
@@ -355,13 +356,25 @@ def create_indexes(page: Page, pdf_files: list[Path]) -> None:
         deed_field.fill(deed_no)
         log.info("  Filled deed_no                 → '%s'", deed_no)
 
-        # 3b  Re-locate deed_no and re-enter with year appended
-        # FIX Bug 4: re-locate the element to avoid stale locator reference
-        deed_field = page.locator(DEED_NO)
-        combined_value = f"{deed_no}{volume_year}"
-        deed_field.clear()
-        deed_field.fill(combined_value)
-        log.info("  Updated deed_no (with year)    → '%s'", combined_value)
+        # FIX Bug 4
+        # 3b Fill presentation year
+        presentation_field = page.locator(PRESENTATION_YEAR)
+        presentation_field.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
+        presentation_field.clear()
+        presentation_field.fill(volume_year)
+
+        log.info(
+            "  Filled presentation_year      → '%s'",
+            volume_year
+        )
+
+        # buggy code block 
+
+        # deed_field = page.locator(DEED_NO)
+        # combined_value = f"{deed_no}{volume_year}"
+        # deed_field.clear()
+        # deed_field.fill(combined_value)
+        # log.info("  Updated deed_no (with year)    → '%s'", combined_value)
 
         # 3c  Click 'Add Index' button
         log.info("  Clicking #addindexBtn…")
