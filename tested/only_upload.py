@@ -24,7 +24,7 @@ from playwright.sync_api import (
 #  CONFIGURATION
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/shanu-gaya/3500-1990-19-1-SERGHATI-PDF-IND"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/VOL-17-1960-DBG-PDF-DONE-IND"
 HEADLESS: bool   = False
 
 WAIT_FOR_UPLOAD_PAGE_MS: int = 300_000   # 5 min for manual login + navigation
@@ -32,6 +32,21 @@ PAGE_TIMEOUT_MS: int         =  120_000
 NAV_TIMEOUT_MS: int          =  120_000
 UPLOAD_TIMEOUT_MS: int       = 120_000
 MAX_UPLOAD_ITERATIONS: int   =  1_000
+
+# ── Volume config (previously in config.txt) ──────────────────────────────────
+# VOLUME_CONFIG: dict = {
+#     "office_district":  "Nalanda",
+#     "office_sro":       "Nalanda",
+#     "volume_district":  "Nalanda",
+#     "volume_sro":       "Hilsa",
+#     "volume_no":        "17",
+#     "volume_year":      "1923",
+#     "book_type":        "book1",
+#     "radio":            "no",
+# }
+
+# hilsa id : DAM_262211
+# pass : Muskan@nimbus1
 
 # The upload section URL fragment — automation only starts here
 UPLOAD_PAGE_URL_FRAGMENT = "indexScanned"

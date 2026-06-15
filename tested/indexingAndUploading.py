@@ -4,30 +4,6 @@
 # run the script with correct file path
 # manually enter the login crediansals 
 # indexing starts automatically : 
-"""
-Government Indexing Portal Automation Script
-=============================================
-Portal : Bihar e-Registration (enibandhan.bihar.gov.in)
-Uses Playwright (sync API) to automate volume index creation and submission.
-
-Upload flow (confirmed from portal JS source):
-  set_input_files() → onchange fires checkFileSize()
-                    → validatePDF() reads file bytes
-                    → fileupload() POSTs to FILE_URL (uploads file, no dialog yet)
-                    → createindex() POSTs to DIGITIZATION_INDEX_URL
-                    → on success: alert("The deed document has been uploaded successfully.")
-                    → form POST to /digitize/indexScanned  ← full page reload
-
-So: one dialog fires per upload, THEN the page reloads. We accept the dialog
-and wait for the reload before moving to the next row.
-
-Usage:
-    python portal_automation.py
-
-Requirements:
-    pip install playwright
-    playwright install chromium
-"""
 
 import sys
 import logging
@@ -42,8 +18,20 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/shanu-gaya/3500-1990-19-1-SERGHATI-PDF-IND"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/PDF/VOL-31-1959-BHR-pdf-IND"
 HEADLESS: bool   = False
+
+# ── Volume config (previously in config.txt) ──────────────────────────────────
+VOLUME_CONFIG: dict = {
+    "office_district":  "Darbhanga",
+    "office_sro":       "Darbhanga",
+    "volume_district":  "Darbhanga",
+    "volume_sro":       "Bahera",
+    "volume_no":        "31",
+    "volume_year":      "1959",
+    "book_type":        "book1",
+    "radio":            "no",
+}
 
 LOGIN_TIMEOUT_MS: int  = 120_000
 PAGE_TIMEOUT_MS: int   =  30_000
@@ -907,7 +895,10 @@ def main() -> None:
         try:
             login(page)
 
-            volume_data = read_volume_data(FOLDER_PATH)
+            # initally it was reading the config.txt file from the config data, now we have defined the config information in the current script as well, so we don't need to read the config file, we can just define our config in the current script and we are good to go
+
+            # volume_data = read_volume_data(FOLDER_PATH)
+            volume_data = VOLUME_CONFIG
             create_volume(page, volume_data)
 
             pdf_files = read_pdf_files(FOLDER_PATH)

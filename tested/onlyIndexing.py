@@ -24,13 +24,25 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/NALANDA/21-5-26/2701-1922-13-hilsha"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/TANWI-GAYA/3500-1991-13-1-SERGHATI"
 HEADLESS: bool   = False
 
 LOGIN_TIMEOUT_MS: int = 120_000   # 2 min for manual login + CAPTCHA
 PAGE_TIMEOUT_MS: int  =  30_000   # default element timeout
 NAV_TIMEOUT_MS: int   =  60_000   # full-page navigation timeout
 MANUAL_TIMEOUT_MS: int = 600_000  # 10 min for manual login + volume creation
+
+# ── Volume config (previously in config.txt) ──────────────────────────────────
+VOLUME_CONFIG: dict = {
+    "office_district":  "gaya",
+    "office_sro":       "gaya",
+    "volume_district":  "gaya",
+    "volume_sro":       "sherghati",
+    "volume_no":        "13",
+    "volume_year":      "1991",
+    "book_type":        "book1",
+    "radio":            "no",
+}
 
 # ── Selectors (verified against portal HTML) ──────────────────────────────────
 NEW_REQ_BTN      = "#new_req_btn"
