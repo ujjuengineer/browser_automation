@@ -1,6 +1,3 @@
-# NOTE : tested for automated index creation 
-# just login into the portal and automation starts
-
 """
 Government Indexing Portal Automation Script
 =============================================
@@ -29,12 +26,13 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/06-05-2026/VOL-39-1919-2700-BRS-PDF-DONE"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/NALANDA/21-5-26/2701-1923-17-hilsha"
 HEADLESS: bool   = False
 
 LOGIN_TIMEOUT_MS: int = 120_000   # 2 min for manual login + CAPTCHA
 PAGE_TIMEOUT_MS: int  =  30_000   # default element timeout
 NAV_TIMEOUT_MS: int   =  60_000   # full-page navigation timeout
+MANUAL_TIMEOUT_MS: int = 600_000  # 10 min for manual login + volume creation
 
 # ── Selectors (verified against portal HTML) ──────────────────────────────────
 NEW_REQ_BTN      = "#new_req_btn"
@@ -88,32 +86,59 @@ log = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════
-#  STEP 1 – LOGIN
+#  STEP 1 – WAIT FOR MANUAL SETUP
 # ═══════════════════════════════════════════
 
-def login(page: Page) -> None:
+def wait_for_manual_setup(page: Page) -> None:
     """
-    Navigate to the login page and wait for the user to manually enter
-    credentials and solve the CAPTCHA.
-    Login is confirmed when #new_req_btn appears in the DOM.
+    Open the login page and wait for the user to:
+      1. Log in manually (credentials + CAPTCHA).
+      2. Click the New Request button themselves.
+      3. Fill the volume form manually and click Save.
+      4. Wait until the volume is created and the Index Details section
+         appears — specifically until #presentation_year and #deed_no
+         are both visible on the page.
+
+    Automation begins only after both fields are detected.
     """
     log.info("Navigating to login page: %s", LOGIN_URL)
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
 
     log.info(
-        "⏳  Please log in manually in the browser window.\n"
-        "    Waiting up to %d seconds…",
-        LOGIN_TIMEOUT_MS // 1000,
+        "⏳  Please complete the following steps manually in the browser:\n"
+        "    1. Enter your credentials and solve the CAPTCHA to log in.\n"
+        "    2. Click the 'New Request' button.\n"
+        "    3. Fill in the volume form and click Save.\n"
+        "    4. Wait for the success popup and click OK.\n"
+        "\n"
+        "    Automation will start automatically once the Presentation Year\n"
+        "    and Deed No. fields appear on screen.\n"
+        "    (You have up to %d minutes.)",
+        MANUAL_TIMEOUT_MS // 60_000,
     )
+
     try:
-        # #new_req_btn only appears after a successful login
+        # Wait until BOTH #presentation_year AND #deed_no are visible —
+        # this only happens after the volume is saved and #indexdetailsdiv
+        # is revealed by the portal JS.
         page.wait_for_function(
-            "() => document.querySelector('#new_req_btn') !== null",
-            timeout=LOGIN_TIMEOUT_MS,
+            """() => {
+                var py = document.querySelector('#presentation_year');
+                var dn = document.querySelector('#deed_no');
+                if (!py || !dn) return false;
+                var pyRect = py.getBoundingClientRect();
+                var dnRect = dn.getBoundingClientRect();
+                return pyRect.width > 0 && pyRect.height > 0
+                    && dnRect.width > 0 && dnRect.height > 0;
+            }""",
+            timeout=MANUAL_TIMEOUT_MS,
         )
-        log.info("✅  Login detected. URL: %s", page.url)
+        log.info("✅  Presentation Year and Deed No. fields detected. Starting automation…")
     except PlaywrightTimeoutError:
-        log.error("❌  Login not detected within %d s. Exiting.", LOGIN_TIMEOUT_MS // 1000)
+        log.error(
+            "❌  Fields not detected within %d minutes. Exiting.",
+            MANUAL_TIMEOUT_MS // 60_000,
+        )
         raise SystemExit(1)
 
 
@@ -349,7 +374,7 @@ def create_volume(page: Page, data: dict) -> None:
 
 
 # ═══════════════════════════════════════════
-#  STEP 3a – READ PDF FILES 
+#  STEP 3a – READ PDF FILES
 # ═══════════════════════════════════════════
 
 def read_pdf_files(folder_path: str) -> list:
@@ -373,7 +398,6 @@ def read_pdf_files(folder_path: str) -> list:
     return pdf_files
 
 
-
 # ═══════════════════════════════════════════
 #  STEP 3b – CREATE INDEX ENTRIES
 # ═══════════════════════════════════════════
@@ -391,9 +415,6 @@ def _read_volume_year_from_page(page: Page) -> str:
     log.info("  Read #volume_year from page    → '%s'", year)
     return year
 
-
-
-"""==============difference starts==============="""
 
 MAX_RETRIES: int = 3   # max attempts per PDF before giving up
 
@@ -468,27 +489,25 @@ def _fill_and_submit_entry(page: Page, volume_year: str, deed_no: str) -> str:
     return dialog_text[0] if dialog_text else ""
 
 
-def create_indexes(page: Page, pdf_files: list) -> list:
+def create_indexes(page: Page, pdf_files: list) -> None:
     """
     For every PDF file, fill presentation_year + deed_no and click Add.
 
     - Uses row count increase as the definitive success signal.
     - Detects duplicate deed alerts and skips immediately (no retry).
     - Retries up to MAX_RETRIES for genuine failures (network etc).
-    - Collects ALL portal alerts and returns them for display after submit.
     - Prints a full summary at the end.
     """
     log.info("─── Step 3: Create Index Entries (%d file(s)) ───", len(pdf_files))
 
     if not pdf_files:
         log.warning("No PDF files to process. Skipping.")
-        return []
+        return
 
     volume_year = _read_volume_year_from_page(page)
 
     failed_files    = []   # genuine failures after all retries
     duplicate_files = []   # skipped because portal said duplicate
-    all_alerts      = []   # every portal alert collected during indexing
 
     for idx, pdf_path in enumerate(pdf_files, start=1):
         deed_no = pdf_path.stem
@@ -510,11 +529,6 @@ def create_indexes(page: Page, pdf_files: list) -> list:
 
             # ── If any alert fired, the entry was rejected — no need to wait ──
             if alert_text:
-                # Record every unique alert for the final report
-                entry = f"{pdf_path.name}  →  {alert_text}"
-                if entry not in all_alerts:
-                    all_alerts.append(entry)
-
                 if any(sig in alert_text.lower() for sig in DUPLICATE_SIGNALS):
                     log.warning("  ⚠️  Deed %s already exists — skipping.", deed_no)
                     duplicate_files.append(pdf_path.name)
@@ -580,18 +594,16 @@ def create_indexes(page: Page, pdf_files: list) -> list:
         )
     log.info("════════════════════════════════════")
 
-    return all_alerts
-
-
 
 # ═══════════════════════════════════════════
 #  STEP 4 – SUBMIT VOLUME
 # ═══════════════════════════════════════════
 
-def submit_volume(page: Page, alerts: list) -> None:
+def submit_volume(page: Page) -> None:
     """
-    Click #submitvolume, then print all collected portal alerts.
+    Click #submitvolume.
     The portal fires a confirm() dialog — we accept it automatically.
+    Then it fires a success alert — we accept that too.
     """
     log.info("─── Step 4: Submit Volume ───")
 
@@ -625,18 +637,6 @@ def submit_volume(page: Page, alerts: list) -> None:
     finally:
         page.remove_listener("dialog", handle_dialog)
 
-    # ── Print all portal alerts collected during indexing ─────────────────
-    if alerts:
-        log.info("")
-        log.info("╔══════════════════════════════════════════════════════╗")
-        log.info("  PORTAL ALERTS DURING INDEXING (%d total)", len(alerts))
-        log.info("╚══════════════════════════════════════════════════════╝")
-        for i, alert in enumerate(alerts, 1):
-            log.warning("  [%d] %s", i, alert)
-        log.info("══════════════════════════════════════════════════════")
-    else:
-        log.info("  No portal alerts were raised during indexing ✅")
-
 
 # ═══════════════════════════════════════════
 #  MAIN
@@ -656,15 +656,12 @@ def main() -> None:
         page.set_default_timeout(PAGE_TIMEOUT_MS)
 
         try:
-            login(page)
+            wait_for_manual_setup(page)
 
-            volume_data = read_volume_data(FOLDER_PATH)
-            create_volume(page, volume_data)
-            
             pdf_files = read_pdf_files(FOLDER_PATH)
-            alerts = create_indexes(page, pdf_files)
+            create_indexes(page, pdf_files)
 
-            submit_volume(page, alerts)
+            submit_volume(page)
 
             log.info("════════════════════════════════════════")
             log.info("  Automation completed successfully 🎉")
@@ -682,4 +679,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

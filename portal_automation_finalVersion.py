@@ -1,6 +1,3 @@
-# NOTE : tested for automated index creation 
-# just login into the portal and automation starts
-
 """
 Government Indexing Portal Automation Script
 =============================================
@@ -29,7 +26,7 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/06-05-2026/VOL-39-1919-2700-BRS-PDF-DONE"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/VOL-18-1961-SP-PDF-DONE"
 HEADLESS: bool   = False
 
 LOGIN_TIMEOUT_MS: int = 120_000   # 2 min for manual login + CAPTCHA

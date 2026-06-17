@@ -1,0 +1,15 @@
+pytest      ->      for running all the test
+pytest -s   ->      for running all the test with print statement
+
+pytest file_name -v         ->      to run the particular test file
+pytest -s file_name -v      ->      to run the particula test file with print stement 
+
+pytest file_name::function_name     ->      to run particular test function 
+
+
+if you want to run all the test but skip some of them then add this decorator to that particular function which you want to skip in the test
+        @pytest.mark.skip 
+
+if you want to test any particular group of test function then mark it as 
+    @pytest.mark.tag_name
+then run this command to test those function    ->      pytest -m tag_name

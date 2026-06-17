@@ -1,11 +1,23 @@
-# NOTE : tested for automated index creation 
-# just login into the portal and automation starts
+# fixed the session expire bugs during the file upload !!
+# NOTE :  TESTED FOR THE INDEXING + UPLOADING
+# AFTER INDEXING MAKE SURE TO OPEN THE DROP DOWN MENU SO THAT SCRIPT WILL IDENTIFY THE "UPLOAD SCANNED DOCUMENT BUTTON"
 
 """
 Government Indexing Portal Automation Script
 =============================================
 Portal : Bihar e-Registration (enibandhan.bihar.gov.in)
 Uses Playwright (sync API) to automate volume index creation and submission.
+
+Upload flow (confirmed from portal JS source):
+  set_input_files() → onchange fires checkFileSize()
+                    → validatePDF() reads file bytes
+                    → fileupload() POSTs to FILE_URL (uploads file, no dialog yet)
+                    → createindex() POSTs to DIGITIZATION_INDEX_URL
+                    → on success: alert("The deed document has been uploaded successfully.")
+                    → form POST to /digitize/indexScanned  ← full page reload
+
+So: one dialog fires per upload, THEN the page reloads. We accept the dialog
+and wait for the reload before moving to the next row.
 
 Usage:
     python portal_automation.py
@@ -17,7 +29,9 @@ Requirements:
 
 import sys
 import logging
+import time
 from pathlib import Path
+from playwright.sync_api import Page, Dialog, TimeoutError as PlaywrightTimeoutError
 
 from playwright.sync_api import (
     sync_playwright, Page, Browser,
@@ -29,12 +43,13 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/06-05-2026/VOL-39-1919-2700-BRS-PDF-DONE"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/NALANDA/21-5-26/2701-1923-04-hilsha"
 HEADLESS: bool   = False
 
-LOGIN_TIMEOUT_MS: int = 120_000   # 2 min for manual login + CAPTCHA
-PAGE_TIMEOUT_MS: int  =  30_000   # default element timeout
-NAV_TIMEOUT_MS: int   =  60_000   # full-page navigation timeout
+LOGIN_TIMEOUT_MS: int  = 120_000   # 2 min for manual login + CAPTCHA
+PAGE_TIMEOUT_MS: int   =  30_000   # default element timeout
+NAV_TIMEOUT_MS: int    =  60_000   # full-page navigation timeout
+UPLOAD_TIMEOUT_MS: int = 120_000   # file upload can be slow (30 MB limit)
 
 # ── Selectors (verified against portal HTML) ──────────────────────────────────
 NEW_REQ_BTN      = "#new_req_btn"
@@ -46,10 +61,10 @@ VOLUME_DISTRICT  = "#volume_district"
 VOLUME_SRO       = "#volume_sro"
 
 # Hidden fields that hold the REAL validated IDs (read by JS validation)
-HIDDEN_DISTRICT_ID2 = "#district_id2"   # office district id
-HIDDEN_SRO_ID2      = "#sro_id2"        # office sro id
-HIDDEN_DISTRICT_ID  = "#district_id"    # volume district id
-HIDDEN_SRO_ID       = "#sro_id"         # volume sro id
+HIDDEN_DISTRICT_ID2 = "#district_id2"
+HIDDEN_SRO_ID2      = "#sro_id2"
+HIDDEN_DISTRICT_ID  = "#district_id"
+HIDDEN_SRO_ID       = "#sro_id"
 
 # Suggestion list <ul> IDs (one per autocomplete field)
 SUGGESTIONS = {
@@ -60,15 +75,15 @@ SUGGESTIONS = {
 }
 
 # Plain inputs / selects
-VOLUME_YEAR      = "#volume_year"        # plain <input type="text">
-BOOK_TYPE_SELECT = "#bookType"           # <select> — NOTE: bookType not book_type
+VOLUME_YEAR      = "#volume_year"
+BOOK_TYPE_SELECT = "#bookType"
 VOLUME_NO        = "#volume_no"
 RADIO_YES        = "#isvolumeforwardedY"
 RADIO_NO         = "#isvolumeforwardedN"
 ADD_VOLUME_BTN   = "#addVolumeBtn"
 
 # Index entry fields
-PRESENTATION_YEAR = "#presentation_year"  # must be filled BEFORE deed_no
+PRESENTATION_YEAR = "#presentation_year"
 DEED_NO           = "#deed_no"
 ADD_INDEX_BTN     = "#addindexBtn"
 SUBMIT_VOLUME_BTN = "#submitvolume"
@@ -106,7 +121,6 @@ def login(page: Page) -> None:
         LOGIN_TIMEOUT_MS // 1000,
     )
     try:
-        # #new_req_btn only appears after a successful login
         page.wait_for_function(
             "() => document.querySelector('#new_req_btn') !== null",
             timeout=LOGIN_TIMEOUT_MS,
@@ -179,52 +193,35 @@ def _fill_autocomplete(page: Page, input_selector: str, suggestion_selector: str
                        hidden_selector: str, value: str, label: str) -> None:
     """
     Fill a typeahead/autocomplete field on the Bihar portal.
-
-    How the portal works (from the HTML source):
-      1. User types into a plain <input> (e.g. #office_district).
-      2. JS listens on the 'input' event, filters a preloaded list, and
-         injects matching <li class="list-group-item"> into a <ul>
-         (e.g. #district_suggestions2).
-      3. Clicking an <li> sets the visible input text AND stores the
-         numeric ID into a hidden <input> (e.g. #district_id2).
-      4. Form validation reads the hidden field — NOT the visible text.
-
-    So we must:
-      a. Type enough chars to trigger suggestions.
-      b. Wait for the matching <li> to appear.
-      c. Click it (which also fills the hidden field automatically).
-      d. Verify the hidden field is no longer 0.
+    Types partial text, waits for the suggestion list, clicks the match,
+    then verifies the hidden ID field was populated.
     """
-    TYPE_CHARS = 4   # type first 4 characters to trigger suggestions
+    TYPE_CHARS = 4
 
     input_loc = page.locator(input_selector)
     input_loc.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
 
-    # Clear any existing text
     input_loc.click()
     input_loc.click(click_count=3)
     input_loc.press("Control+a")
     input_loc.press("Backspace")
     page.wait_for_timeout(300)
 
-    # Type slowly so the JS 'input' event fires correctly
     partial = value[:TYPE_CHARS]
     log.info("  Typing '%s' in %-20s to open suggestions…", partial, label)
     input_loc.type(partial, delay=120)
 
-    # Wait for the suggestion list to become visible
     suggestion_ul = page.locator(suggestion_selector)
     try:
         suggestion_ul.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         log.error(
-            "❌  Suggestion list '%s' did not appear after typing '%s'. "
-            "Check TYPE_CHARS or the selector.", suggestion_selector, partial
+            "❌  Suggestion list '%s' did not appear after typing '%s'.",
+            suggestion_selector, partial
         )
         raise
 
-    # Find the matching <li> — try exact text first, then contains
-    li_exact = suggestion_ul.locator(f"li.list-group-item:text-is('{value}')")
+    li_exact    = suggestion_ul.locator(f"li.list-group-item:text-is('{value}')")
     li_contains = suggestion_ul.locator(f"li.list-group-item:has-text('{value}')")
 
     if li_exact.count() > 0:
@@ -235,29 +232,20 @@ def _fill_autocomplete(page: Page, input_selector: str, suggestion_selector: str
         li_contains.first.click()
         log.info("  Selected %-22s → '%s' (contains match on '%s')", label, value, chosen)
     else:
-        # Log all visible options to help debug
         all_items = suggestion_ul.locator("li.list-group-item").all()
         visible = [li.inner_text().strip() for li in all_items]
-        log.error(
-            "❌  '%s' not found in suggestions for '%s'. Visible: %s",
-            value, label, visible
-        )
+        log.error("❌  '%s' not found in suggestions for '%s'. Visible: %s", value, label, visible)
         raise ValueError(f"Could not find '{value}' in dropdown for '{label}'")
 
-    # Wait briefly for the hidden field to be populated by the click handler
     page.wait_for_timeout(400)
 
-    # Verify hidden field was actually set (not 0 or empty)
     hidden_value = page.locator(hidden_selector).get_attribute("value") or "0"
     if hidden_value in ("0", ""):
         log.error(
-            "❌  Hidden field '%s' is still '%s' after selecting '%s'. "
-            "The click may not have fired the JS handler.",
+            "❌  Hidden field '%s' is still '%s' after selecting '%s'.",
             hidden_selector, hidden_value, value
         )
-        raise RuntimeError(
-            f"Hidden field {hidden_selector} not populated after selecting '{value}'"
-        )
+        raise RuntimeError(f"Hidden field {hidden_selector} not populated after selecting '{value}'")
 
     log.info("  Hidden field %-18s → '%s' ✓", hidden_selector, hidden_value)
 
@@ -273,17 +261,14 @@ def create_volume(page: Page, data: dict) -> None:
     """
     log.info("─── Step 2: Create New Volume Index ───")
 
-    # 2.1  Click New Request
     log.info("Clicking #new_req_btn…")
     btn = page.locator(NEW_REQ_BTN)
     btn.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
     btn.click()
 
-    # 2.2  Wait for the form to load (office_district input appears)
     log.info("Waiting for volume form…")
     page.locator(OFFICE_DISTRICT).wait_for(state="visible", timeout=NAV_TIMEOUT_MS)
 
-    # 2.3  Autocomplete fields (each sets a hidden ID field on click)
     _fill_autocomplete(
         page, OFFICE_DISTRICT, SUGGESTIONS[OFFICE_DISTRICT],
         HIDDEN_DISTRICT_ID2, data["office_district"], "office_district"
@@ -301,11 +286,9 @@ def create_volume(page: Page, data: dict) -> None:
         HIDDEN_SRO_ID, data["volume_sro"], "volume_sro"
     )
 
-    # 2.4  Plain text inputs
     _fill_plain(page, VOLUME_YEAR, data["volume_year"], "volume_year")
     _fill_plain(page, VOLUME_NO,   data["volume_no"],   "volume_no")
 
-    # 2.5  Book type <select> — portal uses id="bookType" with values 1-4
     book_value_map = {"book1": "1", "book2": "2", "book3": "3", "book4": "4"}
     book_val = book_value_map.get(data["book_type"].lower(), data["book_type"])
     book_loc = page.locator(BOOK_TYPE_SELECT)
@@ -313,7 +296,6 @@ def create_volume(page: Page, data: dict) -> None:
     book_loc.select_option(value=book_val)
     log.info("  Selected %-22s → '%s' (value='%s')", "book_type", data["book_type"], book_val)
 
-    # 2.6  Radio button — portal uses id="isvolumeforwardedY" / "isvolumeforwardedN"
     radio_val = data["radio"].strip().lower()
     if radio_val == "yes":
         page.locator(RADIO_YES).check()
@@ -322,12 +304,6 @@ def create_volume(page: Page, data: dict) -> None:
         page.locator(RADIO_NO).check()
         log.info("  Checked radio                  → No")
 
-    # 2.7  Click Save
-    # The portal fires an alert() AFTER the AJAX call completes:
-    #   "The volume has been created successfully."
-    # Only after the user clicks OK does the JS set #indexdetailsdiv to visible.
-    # We use page.expect_event("dialog") as a context manager so Playwright
-    # waits for the dialog to actually appear before we try to accept it.
     log.info("Clicking #addVolumeBtn and waiting for success alert…")
     save_btn = page.locator(ADD_VOLUME_BTN)
     save_btn.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
@@ -339,23 +315,17 @@ def create_volume(page: Page, data: dict) -> None:
     log.info("  Alert text: '%s' → accepting", dialog.message)
     dialog.accept()
 
-    # 2.8  Now wait for #indexdetailsdiv to become visible
-    # The portal JS sets display:block immediately after the alert is dismissed
     log.info("Waiting for #indexdetailsdiv to become visible…")
-    index_div = page.locator("#indexdetailsdiv")
-    index_div.wait_for(state="visible", timeout=NAV_TIMEOUT_MS)
-
+    page.locator("#indexdetailsdiv").wait_for(state="visible", timeout=NAV_TIMEOUT_MS)
     log.info("✅  Volume created. Index Details section is now visible.")
 
 
 # ═══════════════════════════════════════════
-#  STEP 3a – READ PDF FILES 
+#  STEP 3a – READ PDF FILES
 # ═══════════════════════════════════════════
 
 def read_pdf_files(folder_path: str) -> list:
-    """
-    Return a list of PDF paths from *folder_path*, sorted numerically by stem.
-    """
+    """Return a list of PDF paths from *folder_path*, sorted numerically by stem."""
     folder = Path(folder_path)
     if not folder.is_dir():
         raise NotADirectoryError(f"Not a directory: {folder}")
@@ -373,16 +343,11 @@ def read_pdf_files(folder_path: str) -> list:
     return pdf_files
 
 
-
 # ═══════════════════════════════════════════
 #  STEP 3b – CREATE INDEX ENTRIES
 # ═══════════════════════════════════════════
 
 def _read_volume_year_from_page(page: Page) -> str:
-    """
-    Read the current value of #volume_year from the page.
-    The portal renders it as a plain <input type="text" id="volume_year">.
-    """
     loc = page.locator(VOLUME_YEAR)
     loc.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
     year = loc.input_value().strip()
@@ -392,43 +357,26 @@ def _read_volume_year_from_page(page: Page) -> str:
     return year
 
 
+MAX_RETRIES: int = 3
 
-"""==============difference starts==============="""
-
-MAX_RETRIES: int = 3   # max attempts per PDF before giving up
-
-# Portal alert messages that mean "already saved, don't retry"
 DUPLICATE_SIGNALS = [
     "already exists",
     "deed number already exists",
 ]
 
+
 def _get_index_row_count(page: Page) -> int:
-    """Return the current number of data rows in the #indexdetails table."""
     rows = page.locator("#indexdetails tbody tr")
     count = rows.count()
     if count == 1:
-        text = rows.first.inner_text().strip()
-        if "no records" in text.lower():
+        if "no records" in rows.first.inner_text().strip().lower():
             return 0
     return count
 
 
 def _fill_and_submit_entry(page: Page, volume_year: str, deed_no: str) -> str:
-    """
-    Fill presentation_year + deed_no and click Add Index once.
-
-    Returns the dialog message text if a validation alert fired, or "" on success.
-
-    Speed improvements:
-    - Removed wait_for_timeout() pauses — Playwright waits are event-driven,
-      not time-based, so fixed sleeps just waste time.
-    - Dialog is captured via a registered handler set BEFORE the click, then
-      immediately removed after. This avoids the 10-second timeout on every
-      successful entry that was adding ~30 minutes to a 188-file run.
-    """
-    # Capture dialog in a simple list via a pre-registered handler
-    # (avoids both the "already handled" crash and the 10s timeout penalty)
+    """Fill presentation_year + deed_no and click Add Index once.
+    Returns dialog message text if an alert fired, or '' on success."""
     dialog_text = []
 
     def _grab_dialog(d: Dialog) -> None:
@@ -438,32 +386,27 @@ def _fill_and_submit_entry(page: Page, volume_year: str, deed_no: str) -> str:
 
     page.once("dialog", _grab_dialog)
 
-    # Fill presentation_year
     py_field = page.locator(PRESENTATION_YEAR)
     py_field.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
     py_field.click()
     py_field.click(click_count=3)
     py_field.fill(volume_year)
-    py_field.press("Tab")   # triggers portal year-validation JS
+    py_field.press("Tab")
 
-    # Fill deed_no
     deed_field = page.locator(DEED_NO)
     deed_field.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
     deed_field.click()
     deed_field.click(click_count=3)
     deed_field.fill(deed_no)
 
-    # Click Add Index
     add_btn = page.locator(ADD_INDEX_BTN)
     add_btn.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
     add_btn.click()
 
-    # If no dialog fired the handler is still registered but harmless —
-    # remove it so it doesn't bleed into the next iteration
     try:
         page.remove_listener("dialog", _grab_dialog)
     except Exception:
-        pass  # already consumed by the once() call — that's fine
+        pass
 
     return dialog_text[0] if dialog_text else ""
 
@@ -471,12 +414,7 @@ def _fill_and_submit_entry(page: Page, volume_year: str, deed_no: str) -> str:
 def create_indexes(page: Page, pdf_files: list) -> list:
     """
     For every PDF file, fill presentation_year + deed_no and click Add.
-
-    - Uses row count increase as the definitive success signal.
-    - Detects duplicate deed alerts and skips immediately (no retry).
-    - Retries up to MAX_RETRIES for genuine failures (network etc).
-    - Collects ALL portal alerts and returns them for display after submit.
-    - Prints a full summary at the end.
+    Returns list of all portal alert strings collected during indexing.
     """
     log.info("─── Step 3: Create Index Entries (%d file(s)) ───", len(pdf_files))
 
@@ -484,21 +422,18 @@ def create_indexes(page: Page, pdf_files: list) -> list:
         log.warning("No PDF files to process. Skipping.")
         return []
 
-    volume_year = _read_volume_year_from_page(page)
-
-    failed_files    = []   # genuine failures after all retries
-    duplicate_files = []   # skipped because portal said duplicate
-    all_alerts      = []   # every portal alert collected during indexing
+    volume_year     = _read_volume_year_from_page(page)
+    failed_files    = []
+    duplicate_files = []
+    all_alerts      = []
 
     for idx, pdf_path in enumerate(pdf_files, start=1):
         deed_no = pdf_path.stem
         log.info("[%d/%d] Processing: %s  →  deed_no='%s'",
                  idx, len(pdf_files), pdf_path.name, deed_no)
 
-        rows_before = _get_index_row_count(page)
-        log.info("  Table rows before: %d", rows_before)
-
-        success   = False
+        rows_before  = _get_index_row_count(page)
+        success      = False
         is_duplicate = False
 
         for attempt in range(1, MAX_RETRIES + 1):
@@ -508,9 +443,7 @@ def create_indexes(page: Page, pdf_files: list) -> list:
 
             alert_text = _fill_and_submit_entry(page, volume_year, deed_no)
 
-            # ── If any alert fired, the entry was rejected — no need to wait ──
             if alert_text:
-                # Record every unique alert for the final report
                 entry = f"{pdf_path.name}  →  {alert_text}"
                 if entry not in all_alerts:
                     all_alerts.append(entry)
@@ -521,12 +454,9 @@ def create_indexes(page: Page, pdf_files: list) -> list:
                     is_duplicate = True
                     break
                 else:
-                    # Other validation alert (e.g. "please click save button")
-                    # — row will never increase, so skip the wait and retry immediately
                     log.warning("  Validation alert on attempt %d — retrying.", attempt)
                     continue
 
-            # ── No alert fired — confirm row count increased ──────────────
             try:
                 page.wait_for_function(
                     f"() => document.querySelectorAll('#indexdetails tbody tr').length > {rows_before}",
@@ -538,10 +468,8 @@ def create_indexes(page: Page, pdf_files: list) -> list:
                 break
 
             except PlaywrightTimeoutError:
-                log.warning(
-                    "  Row count did not increase after attempt %d (still %d).",
-                    attempt, rows_before,
-                )
+                log.warning("  Row count did not increase after attempt %d (still %d).",
+                            attempt, rows_before)
                 rows_before = _get_index_row_count(page)
 
         if not success and not is_duplicate:
@@ -550,7 +478,6 @@ def create_indexes(page: Page, pdf_files: list) -> list:
 
         log.info("  Done: '%s'  [%d/%d]", pdf_path.name, idx, len(pdf_files))
 
-    # ── Final summary ─────────────────────────────────────────────────────────
     final_count = _get_index_row_count(page)
     expected    = len(pdf_files) - len(duplicate_files)
 
@@ -560,72 +487,55 @@ def create_indexes(page: Page, pdf_files: list) -> list:
     log.info("  Created         : %d", final_count)
     log.info("  Duplicates skip : %d", len(duplicate_files))
     log.info("  Failed          : %d", len(failed_files))
-
     if duplicate_files:
-        log.warning("  ⚠️  Skipped duplicates:")
-        for name in duplicate_files:
-            log.warning("     - %s", name)
-
+        log.warning("  ⚠️  Skipped duplicates: %s", duplicate_files)
     if failed_files:
-        log.error("  ❌ Failed files:")
-        for name in failed_files:
-            log.error("     - %s", name)
+        log.error("  ❌ Failed: %s", failed_files)
     else:
         log.info("  No failures ✅")
-
     if final_count != expected:
-        log.warning(
-            "  ⚠️  Expected %d rows but table has %d. Some entries may be missing.",
-            expected, final_count,
-        )
+        log.warning("  ⚠️  Expected %d rows but table has %d.", expected, final_count)
     log.info("════════════════════════════════════")
 
     return all_alerts
 
 
-
 # ═══════════════════════════════════════════
-#  STEP 4 – SUBMIT VOLUME
+#  STEP 4 – SUBMIT VOLUME INDEX
 # ═══════════════════════════════════════════
 
 def submit_volume(page: Page, alerts: list) -> None:
     """
-    Click #submitvolume, then print all collected portal alerts.
-    The portal fires a confirm() dialog — we accept it automatically.
+    Click #submitvolume. The portal fires:
+      1. confirm("Are you sure you want to proceed?")  → accept
+      2. alert("Volume details submitted…")            → accept
+    Then redirects back to the dashboard/index-creation page.
     """
     log.info("─── Step 4: Submit Volume ───")
 
     submit_btn = page.locator(SUBMIT_VOLUME_BTN)
     submit_btn.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
 
-    # The portal calls confirm('Are you sure you want to proceed?')
-    def handle_dialog(dialog: Dialog) -> None:
+    def _handle(dialog: Dialog) -> None:
         log.info("  Dialog [%s]: '%s' → accepting", dialog.type, dialog.message)
         dialog.accept()
 
-    page.on("dialog", handle_dialog)
+    page.on("dialog", _handle)
     submit_btn.click()
 
-    # Wait for the success alert / page change
+    # Wait for the portal to redirect away from the index-creation page
     try:
-        page.wait_for_function(
-            """() =>
-                document.querySelector('.success-message, .alert-success, #success_msg')
-                || window.location.href.includes('success')
-                || window.location.href.includes('submitted')
-            """,
+        page.wait_for_url(
+            lambda url: "indexCreation" not in url and "indexCreate" not in url,
             timeout=NAV_TIMEOUT_MS,
         )
-        log.info("✅  Volume submitted successfully.")
+        log.info("✅  Volume submitted. Redirected to: %s", page.url)
     except PlaywrightTimeoutError:
-        log.warning(
-            "⚠️  No success indicator found after submit — "
-            "but the request was sent. Please verify in the browser."
-        )
+        log.warning("⚠️  No redirect detected after submit — continuing anyway.")
     finally:
-        page.remove_listener("dialog", handle_dialog)
+        page.remove_listener("dialog", _handle)
 
-    # ── Print all portal alerts collected during indexing ─────────────────
+    # Print all portal alerts collected during indexing
     if alerts:
         log.info("")
         log.info("╔══════════════════════════════════════════════════════╗")
@@ -638,6 +548,310 @@ def submit_volume(page: Page, alerts: list) -> None:
         log.info("  No portal alerts were raised during indexing ✅")
 
 
+# ═══════════════════════════════════════════════════════
+#  STEP 5 – NAVIGATE TO UPLOAD SCANNED DOCUMENT PAGE
+# ═══════════════════════════════════════════════════════
+
+def navigate_to_upload_page(page: Page) -> None:
+    """
+    Click the 'Upload Scanned Document' link in the left sidebar.
+    """
+    log.info("─── Step 5: Navigate to Upload Scanned Document page ───")
+
+    upload_link = page.locator("text=Upload Scanned Document").first
+    upload_link.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
+    upload_link.click()
+
+    page.wait_for_url(lambda url: "uploadScannedDocument" in url, timeout=NAV_TIMEOUT_MS)
+    page.locator("#rr tbody, #tableBody").first.wait_for(state="visible", timeout=NAV_TIMEOUT_MS)
+    log.info("✅  Upload Scanned Document page loaded. URL: %s", page.url)
+
+
+
+# ═══════════════════════════════════════════════════════
+#  STEP 6 – FIND VOLUME IN LIST AND CLICK PROCESS
+# ═══════════════════════════════════════════════════════
+
+def _go_to_last_pagination_page(page: Page) -> None:
+    last_btn = page.locator("#pagination .page-item.last:not(.disabled) a")
+    if last_btn.count() > 0:
+        last_btn.first.click()
+        page.wait_for_timeout(1200)
+        log.info("  Navigated to last pagination page.")
+    else:
+        log.info("  Already on last page (or single page).")
+
+
+def _go_to_prev_pagination_page(page: Page) -> bool:
+    prev_btn = page.locator("#pagination .page-item.prev:not(.disabled) a")
+    if prev_btn.count() > 0:
+        prev_btn.first.click()
+        page.wait_for_timeout(1000)
+        return True
+    return False
+
+
+def _find_volume_row_on_current_page(page: Page, volume_no: str, volume_district: str):
+    target_no       = volume_no.strip()
+    target_district = volume_district.split("(")[0].strip().lower()
+
+    rows = page.locator("#rr tbody tr, #tableBody tr")
+    for i in range(rows.count()):
+        row   = rows.nth(i)
+        cells = row.locator("td")
+        if cells.count() < 6:
+            continue
+
+        row_vol_no   = cells.nth(5).inner_text().strip()
+        row_district = cells.nth(3).inner_text().strip().lower()
+
+        vol_match      = (row_vol_no == target_no)
+        district_match = (target_district in row_district or row_district in target_district)
+
+        if vol_match and district_match:
+            log.debug("  Row match — vol_no='%s' district='%s'", row_vol_no, row_district)
+            return row
+
+    return None
+
+
+def find_and_process_volume(page: Page, volume_no: str, volume_district: str) -> None:
+    log.info(
+        "─── Step 6: Find volume no='%s', district='%s' and click Process ───",
+        volume_no, volume_district,
+    )
+
+    _go_to_last_pagination_page(page)
+
+    for _ in range(20):
+        row = _find_volume_row_on_current_page(page, volume_no, volume_district)
+        if row:
+            log.info("  Found matching volume. Clicking Process…")
+            process_btn = row.locator("button:has-text('Process')")
+            process_btn.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
+
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS):
+                process_btn.click()
+
+            log.info("✅  Process clicked. Now on: %s", page.url)
+
+            # Wait for network to quiet down and the specific file inputs to attach.
+            try:
+                page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT_MS)
+                page.wait_for_selector(
+                    "#table-section table tbody tr input[type='file']", 
+                    state="attached", 
+                    timeout=NAV_TIMEOUT_MS
+                )
+                total = page.locator("#table-section table tbody tr").count()
+                log.info("  indexScanned table ready via explicit input selector: %d rows.", total)
+            except PlaywrightTimeoutError:
+                log.warning("⚠️  File inputs not detected — trying fallback row evaluation.")
+                page.locator("#table-section table tbody tr").first.wait_for(
+                    state="visible", timeout=NAV_TIMEOUT_MS
+                )
+            return
+
+        if not _go_to_prev_pagination_page(page):
+            break
+
+    raise RuntimeError(
+        f"Volume no='{volume_no}' district='{volume_district}' not found "
+        f"in the pending list after scanning all pages."
+    )
+
+
+# ═══════════════════════════════════════════════════════
+#  STEP 7 – UPLOAD PDF FILES TO EACH INDEX ROW
+# ═══════════════════════════════════════════════════════
+
+def upload_pdf_files(page: Page, folder_path: str) -> None:
+    log.info("─── Step 7: Upload PDF files to index rows ───")
+
+    folder         = Path(folder_path)
+    uploaded_deeds: set  = set()
+    failed_uploads: list = []
+    missing_pdfs:   list = []
+
+    for iteration in range(500):  # safety cap
+        # FIX: Ensure background requests from previous cycles or reloads are 100% finished
+        # before reading DOM structures. This protects against token mismatch errors.
+        try:
+            page.wait_for_load_state("networkidle", timeout=5000)
+        except PlaywrightTimeoutError:
+            log.debug("  Network did not go completely idle before step evaluation, proceeding anyway.")
+
+        # Explicitly wait for file inputs to be present.
+        try:
+            page.wait_for_selector(
+                "#table-section table tbody tr input[type='file']", 
+                state="attached", 
+                timeout=5000
+            )
+        except PlaywrightTimeoutError:
+            log.info("  No pending file inputs found on page. Checking if all rows are done.")
+
+        rows = page.locator("#table-section table tbody tr")
+        row_count = rows.count()
+        log.info("  [iter %d] Table has %d rows.", iteration, row_count)
+
+        if row_count == 0:
+            log.info("  No rows in upload table. Done.")
+            break
+
+        target_deed_no: str | None       = None
+        target_file_input_id: str | None = None
+
+        for i in range(row_count):
+            row   = rows.nth(i)
+            cells = row.locator("td")
+
+            if cells.count() < 8:
+                log.debug("  Row %d has only %d cells — skipping", i, cells.count())
+                continue
+
+            deed_no = cells.nth(6).inner_text().strip()   # col[6] = Deed No.
+            if not deed_no:
+                continue
+
+            if deed_no in uploaded_deeds:
+                continue
+
+            file_input = cells.nth(7).locator("input[type='file']")
+            if file_input.count() == 0:
+                log.info("  Row %d deed=%-8s — file input absent (already uploaded)", i + 1, deed_no)
+                uploaded_deeds.add(deed_no)
+                continue
+
+            target_deed_no       = deed_no
+            target_file_input_id = file_input.get_attribute("id")
+            break
+
+        if target_deed_no is None:
+            log.info("  All rows processed or no pending file inputs remain.")
+            break
+
+        pdf_path = folder / f"{target_deed_no}.pdf"
+        if not pdf_path.exists():
+            log.error("  ❌  PDF not found for deed %s: %s", target_deed_no, pdf_path)
+            missing_pdfs.append(f"{target_deed_no}.pdf")
+            uploaded_deeds.add(target_deed_no)
+            continue
+
+        log.info("  [%d] Uploading deed %-8s ← %s", iteration + 1, target_deed_no, pdf_path.name)
+
+        # Trigger dialog execution INSIDE the expect_event context block.
+        file_input_loc = page.locator(f"#{target_file_input_id}")
+        
+        try:
+            with page.expect_event("dialog", timeout=UPLOAD_TIMEOUT_MS) as dialog_info:
+                file_input_loc.set_input_files(str(pdf_path))
+            
+            dialog = dialog_info.value
+            msg = dialog.message
+            log.info("  Alert: '%s' → accepting", msg)
+            dialog.accept()
+
+            msg_lower = msg.lower()
+            if "success" in msg_lower or "uploaded" in msg_lower:
+                log.info("  ✅  Deed %s uploaded successfully.", target_deed_no)
+            elif "size" in msg_lower or "large" in msg_lower or "30" in msg_lower:
+                log.error("  ❌  File too large for deed %s: '%s'", target_deed_no, msg)
+                failed_uploads.append(f"{target_deed_no}.pdf  (too large)")
+                uploaded_deeds.add(target_deed_no)
+                continue
+            else:
+                log.warning("  ⚠️  Unexpected alert for deed %s: '%s'", target_deed_no, msg)
+                failed_uploads.append(f"{target_deed_no}.pdf  (alert: {msg})")
+                uploaded_deeds.add(target_deed_no)
+                continue
+
+        except PlaywrightTimeoutError:
+            log.warning(
+                "  ⚠️  No dialog within %d s for deed %s — marking as failed.",
+                UPLOAD_TIMEOUT_MS // 1000, target_deed_no
+            )
+            failed_uploads.append(f"{target_deed_no}.pdf  (timeout waiting for alert)")
+            uploaded_deeds.add(target_deed_no)
+            continue
+
+        # After alert is accepted, the portal submits a form causing a full-page POST reload.
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT_MS)
+            
+            # FIX: Introduce a rigid 2.5-second buffer pause after the page completely loads.
+            # This allows the portal server to completely persist session records and map 
+            # updated CSRF tokens cleanly without hitting dynamic execution overlap blocks.
+            page.wait_for_timeout(2500)
+            
+        except PlaywrightTimeoutError:
+            log.warning("  Page navigation didn't reach fully idle state for deed %s.", target_deed_no)
+
+        uploaded_deeds.add(target_deed_no)
+        log.info("  Page reloading for next deed…")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    total_ok = len(uploaded_deeds) - len(missing_pdfs) - len(failed_uploads)
+    log.info("════════════════════════════════════════════")
+    log.info("  Upload complete.")
+    log.info("  Uploaded OK     : %d", total_ok)
+    log.info("  Missing PDFs    : %d", len(missing_pdfs))
+    log.info("  Failed uploads  : %d", len(failed_uploads))
+    if missing_pdfs:
+        log.error("  Missing  : %s", missing_pdfs)
+    if failed_uploads:
+        log.error("  Failed   : %s", failed_uploads)
+    log.info("════════════════════════════════════════════")
+
+
+# ═══════════════════════════════════════════════════════
+#  STEP 8 – SUBMIT UPLOADED VOLUME
+# ═══════════════════════════════════════════════════════
+
+def submit_uploaded_volume(page: Page) -> None:
+    log.info("─── Step 8: Submit uploaded volume ───")
+
+    submit_btn = page.locator("button[onclick='submitVolume();']")
+    if submit_btn.count() == 0:
+        log.warning("  Exact onclick selector missed — trying contains fallback.")
+        submit_btn = page.locator("button[onclick*='submitVolume']").first
+
+    submit_btn.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
+
+    try:
+        # 1. Capture confirmation prompt or validation errors
+        with page.expect_event("dialog", timeout=PAGE_TIMEOUT_MS) as first_dialog_info:
+            submit_btn.click()
+        
+        first_dialog = first_dialog_info.value
+        log.info("  Dialog 1 [%s]: '%s' → accepting", first_dialog.type, first_dialog.message)
+        
+        if "Please upload" in first_dialog.message:
+            first_dialog.accept()
+            raise RuntimeError(f"Portal validation failed: '{first_dialog.message}'")
+            
+        first_dialog.accept() 
+
+        # 2. Capture server response verification notice
+        try:
+            with page.expect_event("dialog", timeout=NAV_TIMEOUT_MS) as second_dialog_info:
+                pass
+            second_dialog = second_dialog_info.value
+            log.info("  Dialog 2 [%s]: '%s' → accepting", second_dialog.type, second_dialog.message)
+            second_dialog.accept()
+        except PlaywrightTimeoutError:
+            log.warning("  No server verification success alert arrived, checking for redirection status anyway.")
+
+        # 3. Wait for redirect
+        page.wait_for_url(
+            lambda url: "uploadScannedDocument" in url,
+            timeout=NAV_TIMEOUT_MS,
+        )
+        log.info("✅  Uploaded volume submitted. URL: %s", page.url)
+
+    except PlaywrightTimeoutError:
+        log.critical("⚠️  Timeout waiting for application state transition/redirection after submission.")
 # ═══════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════
@@ -656,18 +870,38 @@ def main() -> None:
         page.set_default_timeout(PAGE_TIMEOUT_MS)
 
         try:
+            # ── Step 1: Manual login ──────────────────────────────────────
             login(page)
 
+            # ── Step 2: Read config and create volume ─────────────────────
             volume_data = read_volume_data(FOLDER_PATH)
             create_volume(page, volume_data)
-            
-            pdf_files = read_pdf_files(FOLDER_PATH)
-            alerts = create_indexes(page, pdf_files)
 
+            # ── Step 3: Create index entries for every PDF ────────────────
+            pdf_files = read_pdf_files(FOLDER_PATH)
+            alerts    = create_indexes(page, pdf_files)
+
+            # ── Step 4: Submit the volume index ───────────────────────────
             submit_volume(page, alerts)
 
+            # ── Step 5: Go to Upload Scanned Document page ────────────────
+            navigate_to_upload_page(page)
+
+            # ── Step 6: Find the volume we just created and open it ───────
+            find_and_process_volume(
+                page,
+                volume_no       = volume_data["volume_no"],
+                volume_district = volume_data["volume_district"],
+            )
+
+            # ── Step 7: Upload each PDF to its matching row ───────────────
+            upload_pdf_files(page, FOLDER_PATH)
+
+            # ── Step 8: Submit the uploaded volume ────────────────────────
+            submit_uploaded_volume(page)
+
             log.info("════════════════════════════════════════")
-            log.info("  Automation completed successfully 🎉")
+            log.info("  Full automation completed successfully 🎉")
             log.info("════════════════════════════════════════")
 
         except Exception as exc:
@@ -682,4 +916,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
