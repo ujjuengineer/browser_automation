@@ -24,7 +24,7 @@ from playwright.sync_api import (
 #  CONFIGURATION
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/VOL-17-1960-DBG-PDF-DONE-IND"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/18-05-2026-ashish/3500-1984-49-1"
 HEADLESS: bool   = False
 
 WAIT_FOR_UPLOAD_PAGE_MS: int = 300_000   # 5 min for manual login + navigation

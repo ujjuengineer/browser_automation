@@ -18,21 +18,21 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/PDF/VOL-31-1959-BHR-pdf-IND"
+FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/19-05-2026-ashish/3500-1983-57-1"
 HEADLESS: bool   = False
 
 # ── Volume config (previously in config.txt) ──────────────────────────────────
 VOLUME_CONFIG: dict = {
-    "office_district":  "Darbhanga",
-    "office_sro":       "Darbhanga",
-    "volume_district":  "Darbhanga",
-    "volume_sro":       "Bahera",
-    "volume_no":        "31",
-    "volume_year":      "1959",
+    "office_district":  "Gaya",
+    "office_sro":       "Gaya",
+    "volume_district":  "Gaya",
+    "volume_sro":       "Sherghati",
+    "volume_no":        "57",
+    "volume_year":      "1983",
     "book_type":        "book1",
     "radio":            "no",
 }
-
+# redeploying
 LOGIN_TIMEOUT_MS: int  = 120_000
 PAGE_TIMEOUT_MS: int   =  30_000
 NAV_TIMEOUT_MS: int    =  10_000
