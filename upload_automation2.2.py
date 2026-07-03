@@ -1,28 +1,4 @@
 # consist the bugs fixed by gemini !!
-"""
-Government Indexing Portal Automation Script
-=============================================
-Portal : Bihar e-Registration (enibandhan.bihar.gov.in)
-Uses Playwright (sync API) to automate volume index creation and submission.
-
-Upload flow (confirmed from portal JS source):
-  set_input_files() → onchange fires checkFileSize()
-                    → validatePDF() reads file bytes
-                    → fileupload() POSTs to FILE_URL (uploads file, no dialog yet)
-                    → createindex() POSTs to DIGITIZATION_INDEX_URL
-                    → on success: alert("The deed document has been uploaded successfully.")
-                    → form POST to /digitize/indexScanned  ← full page reload
-
-So: one dialog fires per upload, THEN the page reloads. We accept the dialog
-and wait for the reload before moving to the next row.
-
-Usage:
-    python portal_automation.py
-
-Requirements:
-    pip install playwright
-    playwright install chromium
-"""
 
 import sys
 import logging
@@ -40,7 +16,6 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/NALANDA/21-5-26/2701-1923-17-hilsha"
 HEADLESS: bool   = False
 
 LOGIN_TIMEOUT_MS: int  = 120_000   # 2 min for manual login + CAPTCHA
@@ -186,28 +161,6 @@ def _fill_plain(page: Page, selector: str, value: str, label: str) -> None:
     log.info("  Filled %-22s → '%s'", label, value)
 
 
-def _fill_autocomplete(page: Page, input_selector: str, suggestion_selector: str,
-                       hidden_selector: str, value: str, label: str) -> None:
-    """
-    Fill a typeahead/autocomplete field on the Bihar portal.
-    Types partial text, waits for the suggestion list, clicks the match,
-    then verifies the hidden ID field was populated.
-    """
-    TYPE_CHARS = 4
-
-    input_loc = page.locator(input_selector)
-    input_loc.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
-
-    input_loc.click()
-    input_loc.click(click_count=3)
-    input_loc.press("Control+a")
-    input_loc.press("Backspace")
-    page.wait_for_timeout(300)
-
-    partial = value[:TYPE_CHARS]
-    log.info("  Typing '%s' in %-20s to open suggestions…", partial, label)
-    input_loc.type(partial, delay=120)
-
     suggestion_ul = page.locator(suggestion_selector)
     try:
         suggestion_ul.wait_for(state="visible", timeout=PAGE_TIMEOUT_MS)
@@ -246,14 +199,7 @@ def _fill_autocomplete(page: Page, input_selector: str, suggestion_selector: str
 
     log.info("  Hidden field %-18s → '%s' ✓", hidden_selector, hidden_value)
 
-
-# ═══════════════════════════════════════════
-#  STEP 2c – CREATE VOLUME
-# ═══════════════════════════════════════════
-
-def create_volume(page: Page, data: dict) -> None:
-    """
-    Click 'New Request', fill every field in the volume form, and save.
+eld in the volume form, and save.
     Waits for the Index Details section to become visible after save.
     """
     log.info("─── Step 2: Create New Volume Index ───")
@@ -320,11 +266,11 @@ def create_volume(page: Page, data: dict) -> None:
 # ═══════════════════════════════════════════
 #  STEP 3a – READ PDF FILES
 # ═══════════════════════════════════════════
+'''
 
-def read_pdf_files(folder_path: str) -> list:
-    """Return a list of PDF paths from *folder_path*, sorted numerically by stem."""
-    folder = Path(folder_path)
-    if not folder.is_dir():
+'''"""
+
+s_dir():
         raise NotADirectoryError(f"Not a directory: {folder}")
 
     pdf_files = sorted(
@@ -339,7 +285,7 @@ def read_pdf_files(folder_path: str) -> list:
 
     return pdf_files
 
-
+"""
 # ═══════════════════════════════════════════
 #  STEP 3b – CREATE INDEX ENTRIES
 # ═══════════════════════════════════════════

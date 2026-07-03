@@ -1,17 +1,3 @@
-"""
-Government Indexing Portal Automation Script
-=============================================
-Portal : Bihar e-Registration (enibandhan.bihar.gov.in)
-Uses Playwright (sync API) to automate volume index creation and submission.
-
-Usage:
-    python portal_automation.py
-
-Requirements:
-    pip install playwright
-    playwright install chromium
-"""
-
 import sys
 import logging
 from pathlib import Path
@@ -26,7 +12,6 @@ from playwright.sync_api import (
 #  TOP-LEVEL CONFIGURATION  (edit these values)
 # ─────────────────────────────────────────────
 LOGIN_URL: str   = "https://enibandhan.bihar.gov.in/users/login"
-FOLDER_PATH: str = "/Users/ujjwalkumar/Desktop/NALANDA/21-5-26/2701-1923-17-hilsha"
 HEADLESS: bool   = False
 
 LOGIN_TIMEOUT_MS: int = 120_000   # 2 min for manual login + CAPTCHA
